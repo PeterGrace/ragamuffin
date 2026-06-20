@@ -1,33 +1,25 @@
-#[macro_use] extern crate tracing;
+//! Binary entry point: parse the CLI and dispatch. All real logic lives in the
+//! library crate so it can be unit-tested.
 
-use console_subscriber as tokio_console_subscriber;
-use tracing_subscriber::{EnvFilter, Registry, prelude::*};
-use tracing_subscriber::fmt::format::FmtSpan;
-fn main() {
+use clap::Parser;
+use ragamuffin::cli::{run, Cli};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Load a local .env if present (e.g. RUST_LOG); ignore if absent.
     let _ = dotenv::dotenv();
+    init_tracing();
+    let cli = Cli::parse();
+    run(cli).await
+}
 
-    //region console logging
-    let console_layer = tokio_console_subscriber::spawn();
-    let filter_layer = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("warn"))
-        .unwrap();
-    let format_layer = tracing_subscriber::fmt::layer()
-        .event_format(
-            tracing_subscriber::fmt::format()
-                .with_file(true)
-                .with_thread_ids(true)
-                .with_thread_names(true)
-                .with_line_number(true),
-        )
-        .with_span_events(FmtSpan::NONE);
-
-
-    let subscriber = Registry::default()
-        .with(console_layer)
-        .with(filter_layer)
-        .with(format_layer);
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
-    //endregion
-
-    info!("Hello, world!");
+/// Minimal stderr tracing so logs never pollute stdout (stdout carries JSON and
+/// the MCP stdio protocol).
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
