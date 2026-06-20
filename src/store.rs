@@ -20,19 +20,29 @@ pub type Id = String;
 /// One row of metadata, row-aligned with the vectors file and a docs file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetaRecord {
+    /// 16-hex-char content hash; also the docs filename stem.
     pub id: Id,
+    /// Origin of the entry (e.g. "manual", "chat", or a filename).
     pub source: String,
+    /// Arbitrary JSON metadata (e.g. {"chunk": 3}).
     pub metadata: Value,
+    /// Unix timestamp (seconds) when the entry was added or last updated.
     pub added_at: u64,
 }
 
 /// A single search result (§4.2).
 #[derive(Debug, Clone, Serialize)]
 pub struct Hit {
+    /// Cosine similarity to the query, in [-1.0, 1.0]; higher is closer. Not a
+    /// probability or confidence.
     pub score: f32,
+    /// Content-hash id of the matched entry.
     pub id: Id,
+    /// The stored raw text.
     pub text: String,
+    /// Where the entry came from (e.g. "manual", "chat", or a filename).
     pub source: String,
+    /// Arbitrary JSON metadata stored with the entry.
     pub metadata: Value,
 }
 
@@ -43,6 +53,7 @@ struct Manifest {
 
 /// In-memory mirror of the on-disk store. Three parallel structures share one
 /// ordering; `index` maps id → row for O(1) upsert (§6.4).
+#[derive(Debug)]
 pub struct Store {
     dir: PathBuf,
     dim: usize,
@@ -61,8 +72,8 @@ impl Store {
             let m: Manifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
             if m.dim != dim {
                 return Err(StoreError::DimMismatch {
-                    expected: dim,
-                    got: m.dim,
+                    expected: m.dim,
+                    got: dim,
                 });
             }
         }
@@ -99,6 +110,15 @@ impl Store {
             .enumerate()
             .map(|(i, m)| (m.id.clone(), i))
             .collect();
+        // Guard against a truncated or partially-written vectors.bin: the flat
+        // buffer must be exactly `rows * dim` floats, or the store is corrupt.
+        if vectors.len() != meta.len() * dim {
+            return Err(StoreError::Corrupt {
+                floats: vectors.len(),
+                rows: meta.len(),
+                dim,
+            });
+        }
         Ok(Store {
             dir: dir.to_path_buf(),
             dim,
@@ -311,5 +331,18 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].text, "east");
         assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn corrupt_store_load_errors_not_panics() {
+        let dir = tempdir().unwrap();
+        {
+            let mut s = Store::open(dir.path(), 3).unwrap();
+            s.add(&v(3, 0.5), "hello", "manual", Value::Null).unwrap();
+        }
+        // Truncate vectors.bin so it no longer matches meta (3 floats -> 4 bytes).
+        std::fs::write(dir.path().join("vectors.bin"), [0u8; 4]).unwrap();
+        let err = Store::open(dir.path(), 3).unwrap_err();
+        assert!(matches!(err, StoreError::Corrupt { .. }));
     }
 }

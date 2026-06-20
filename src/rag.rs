@@ -20,6 +20,9 @@ pub struct Rag {
 /// Split `text` into overlapping fixed-width word windows (§6.3) so an idea
 /// straddling a boundary stays retrievable from either side.
 pub fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<String> {
+    // Clamp to at least 1 to prevent infinite loops or empty chunks when
+    // chunk_words = 0 is passed (e.g. via `--chunk-words 0`).
+    let chunk_words = chunk_words.max(1);
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.is_empty() {
         return Vec::new();
@@ -130,6 +133,14 @@ mod tests {
     fn chunk_text_short_input_is_one_chunk() {
         assert_eq!(chunk_text("a b c", 30, 10), vec!["a b c".to_string()]);
         assert!(chunk_text("   ", 30, 10).is_empty());
+    }
+
+    #[test]
+    fn chunk_text_zero_width_is_clamped() {
+        // chunk_words = 0 must not produce empty or infinite chunks.
+        let chunks = chunk_text("a b c d e", 0, 0);
+        assert!(!chunks.is_empty());
+        assert!(chunks.iter().all(|c| !c.is_empty()));
     }
 
     #[test]

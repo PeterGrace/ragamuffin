@@ -21,6 +21,14 @@ pub enum StoreError {
     /// A vector's length did not match the store's recorded dimension (§8).
     #[error("vector dimension mismatch: store has {expected}, got {got}")]
     DimMismatch { expected: usize, got: usize },
+    /// The on-disk vectors file and metadata disagree on row count, indicating
+    /// a corrupt or partially-written store.
+    #[error("corrupt store: {floats} vector floats is not {rows} rows x {dim} dims")]
+    Corrupt {
+        floats: usize,
+        rows: usize,
+        dim: usize,
+    },
 }
 
 /// Failure in the RAG orchestration layer.

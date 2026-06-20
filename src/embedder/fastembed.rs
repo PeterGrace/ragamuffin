@@ -31,7 +31,10 @@ impl FastEmbedder {
         let probe = model
             .embed(vec!["probe"], None)
             .map_err(|e| EmbedError::Model(e.to_string()))?;
-        let dim = probe.first().map(|v| v.len()).unwrap_or(384);
+        let dim = probe
+            .first()
+            .map(|v| v.len())
+            .ok_or_else(|| EmbedError::Model("embedding probe produced no vector".to_string()))?;
         Ok(Self {
             model: Mutex::new(model),
             dim,
