@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -153,6 +154,48 @@ impl Store {
         &self.meta
     }
 
+    /// Top-k entries by descending cosine similarity (= dot product, since all
+    /// vectors are unit length). Empty store -> empty list; k clamps to N (§8).
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>, StoreError> {
+        if query.len() != self.dim {
+            return Err(StoreError::DimMismatch {
+                expected: self.dim,
+                got: query.len(),
+            });
+        }
+        let n = self.meta.len();
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        // Parallel dot product over every row (§6.2). Rust note: `into_par_iter`
+        // comes from the rayon prelude and turns the range into a parallel one.
+        let mut scored: Vec<(f32, usize)> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let row = &self.vectors[i * self.dim..(i + 1) * self.dim];
+                let dot = row.iter().zip(query).map(|(a, b)| a * b).sum::<f32>();
+                (dot, i)
+            })
+            .collect();
+        // Sort descending by score. `partial_cmp` because f32 is not `Ord`.
+        scored.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let k = k.min(n);
+        let mut hits = Vec::with_capacity(k);
+        for &(score, i) in scored.iter().take(k) {
+            let m = &self.meta[i];
+            // Read raw text lazily, only for the k results we return (§4.4).
+            let text = fs::read_to_string(self.dir.join("docs").join(format!("{}.txt", m.id)))?;
+            hits.push(Hit {
+                score,
+                id: m.id.clone(),
+                text,
+                source: m.source.clone(),
+                metadata: m.metadata.clone(),
+            });
+        }
+        Ok(hits)
+    }
+
     /// Rewrite all on-disk files (§6.5). Each write is temp-file-then-rename so
     /// a crash cannot leave a torn file.
     fn persist(&self) -> Result<(), StoreError> {
@@ -247,5 +290,26 @@ mod tests {
         let mut s = Store::open(dir.path(), 3).unwrap();
         let err = s.add(&v(4, 0.1), "x", "manual", Value::Null).unwrap_err();
         assert!(matches!(err, StoreError::DimMismatch { .. }));
+    }
+
+    #[test]
+    fn empty_store_search_returns_empty() {
+        let dir = tempdir().unwrap();
+        let s = Store::open(dir.path(), 3).unwrap();
+        assert!(s.search(&v(3, 1.0), 4).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_ranks_closest_first_and_clamps_k() {
+        let dir = tempdir().unwrap();
+        let mut s = Store::open(dir.path(), 2).unwrap();
+        // Unit vectors pointing in distinct directions.
+        s.add(&[1.0, 0.0], "east", "manual", Value::Null).unwrap();
+        s.add(&[0.0, 1.0], "north", "manual", Value::Null).unwrap();
+        // Query closest to "east".
+        let hits = s.search(&[0.9, 0.1], 4).unwrap(); // k > N -> clamps to 2
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].text, "east");
+        assert!(hits[0].score > hits[1].score);
     }
 }
