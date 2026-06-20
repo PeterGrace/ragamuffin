@@ -2,9 +2,9 @@
 //! (§4.1). Output rows MUST be unit length so the store can treat cosine
 //! similarity as a plain dot product.
 
-pub mod fastembed;
 #[cfg(test)]
 pub mod fake;
+pub mod fastembed;
 
 use crate::error::EmbedError;
 

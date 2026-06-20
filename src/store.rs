@@ -59,7 +59,10 @@ impl Store {
         if manifest_path.exists() {
             let m: Manifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
             if m.dim != dim {
-                return Err(StoreError::DimMismatch { expected: dim, got: m.dim });
+                return Err(StoreError::DimMismatch {
+                    expected: dim,
+                    got: m.dim,
+                });
             }
         }
         Self::load(dir, dim)
@@ -95,7 +98,13 @@ impl Store {
             .enumerate()
             .map(|(i, m)| (m.id.clone(), i))
             .collect();
-        Ok(Store { dir: dir.to_path_buf(), dim, vectors, meta, index })
+        Ok(Store {
+            dir: dir.to_path_buf(),
+            dim,
+            vectors,
+            meta,
+            index,
+        })
     }
 
     /// Upsert keyed by content hash of `text` (§6.4). Returns the entry id.
@@ -107,7 +116,10 @@ impl Store {
         metadata: Value,
     ) -> Result<Id, StoreError> {
         if vector.len() != self.dim {
-            return Err(StoreError::DimMismatch { expected: self.dim, got: vector.len() });
+            return Err(StoreError::DimMismatch {
+                expected: self.dim,
+                got: vector.len(),
+            });
         }
         let id = content_id(text);
         fs::write(self.dir.join("docs").join(format!("{id}.txt")), text)?;
@@ -149,7 +161,10 @@ impl Store {
             bytes.extend_from_slice(&f.to_le_bytes());
         }
         write_atomic(&self.dir.join("vectors.bin"), &bytes)?;
-        write_atomic(&self.dir.join("meta.json"), &serde_json::to_vec_pretty(&self.meta)?)?;
+        write_atomic(
+            &self.dir.join("meta.json"),
+            &serde_json::to_vec_pretty(&self.meta)?,
+        )?;
         write_atomic(
             &self.dir.join("manifest.json"),
             &serde_json::to_vec_pretty(&Manifest { dim: self.dim })?,
@@ -196,7 +211,12 @@ mod tests {
         let id = {
             let mut s = Store::open(dir.path(), 3).unwrap();
             let id = s
-                .add(&v(3, 0.5), "hello world", "manual", serde_json::json!({"k": 1}))
+                .add(
+                    &v(3, 0.5),
+                    "hello world",
+                    "manual",
+                    serde_json::json!({"k": 1}),
+                )
                 .unwrap();
             assert_eq!(s.count(), 1);
             id
@@ -212,7 +232,9 @@ mod tests {
     fn identical_text_does_not_duplicate() {
         let dir = tempdir().unwrap();
         let mut s = Store::open(dir.path(), 3).unwrap();
-        let a = s.add(&v(3, 0.1), "same text", "manual", Value::Null).unwrap();
+        let a = s
+            .add(&v(3, 0.1), "same text", "manual", Value::Null)
+            .unwrap();
         let b = s.add(&v(3, 0.9), "same text", "chat", Value::Null).unwrap();
         assert_eq!(a, b); // same content hash
         assert_eq!(s.count(), 1); // updated in place, not duplicated

@@ -14,10 +14,12 @@ pub struct FakeEmbedder {
 impl FakeEmbedder {
     /// Construct with a small fixed vocabulary.
     pub fn new() -> Self {
-        let vocab = ["cat", "dog", "rust", "python", "memory", "vector", "food", "code"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let vocab = [
+            "cat", "dog", "rust", "python", "memory", "vector", "food", "code",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         Self { vocab }
     }
 }
