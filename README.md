@@ -12,11 +12,19 @@ offline CLI and an MCP server.
 
     ragamuffin --store ./ragstore add "a fact worth remembering"
     ragamuffin --store ./ragstore ingest notes.txt --chunk-words 180 --overlap 40
+    ragamuffin --store ./ragstore ingest ./notes --ext md,txt --max-bytes 5000000
     ragamuffin --store ./ragstore search "what did I note about X" -k 4
     ragamuffin --store ./ragstore list
 
 `add`, `ingest`, and `search` use a local embedding model (BGE-small, downloaded
 on first use into `.fastembed_cache/`). `list` is fully offline.
+
+`ingest` accepts a file or a directory. Given a directory it recurses, skipping
+hidden entries and anything that does not look like UTF-8 text (binaries are
+detected by content, not just extension). Use `--ext` to narrow by extension and
+`--max-bytes` to cap file size. Markdown files are chunked on headings so each
+chunk stays self-contained; other files use fixed-width word windows. Re-running
+`ingest` is idempotent.
 
 ## MCP server
 
