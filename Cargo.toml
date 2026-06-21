@@ -4,14 +4,29 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Peter Grace <pete.grace@gmail.com>"]
 
+[lib]
+name = "ragamuffin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ragamuffin"
+path = "src/main.rs"
+
 [dependencies]
-ctrlc = { version = "3.4.5", features = ["termination"] }
-lazy_static = "1.5.0"
-serde = { version = "1.0.216", features = ["derive"] }
-thiserror = "2.0.6"
-tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "time"] }
-tracing = "0.1.41"
-tracing-log = "0.2.0"
-tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
-console-subscriber = "0.4.1"
-dotenv = "0.15.0"
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+dotenv = "0.15"
+fastembed = "5"
+rayon = "1"
+rmcp = { version = "1", features = ["server", "macros", "transport-io"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
