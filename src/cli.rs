@@ -7,9 +7,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use tracing::warn;
 
 use crate::embedder::fastembed::FastEmbedder;
 use crate::rag::Rag;
+use crate::scan::{self, ScanOpts};
 use crate::store::Store;
 
 /// ragamuffin: local-first semantic memory.
@@ -35,13 +38,20 @@ pub enum Command {
         #[arg(long, default_value = "manual")]
         source: String,
     },
-    /// Chunk a text file and store each chunk.
+    /// Ingest a text file, or every text-like file under a directory.
     Ingest {
         path: PathBuf,
         #[arg(long = "chunk-words", default_value_t = 180)]
         chunk_words: usize,
         #[arg(long = "overlap", default_value_t = 40)]
         overlap_words: usize,
+        /// Directory ingest: comma-separated extension allowlist (e.g.
+        /// "md,txt"). Omit to ingest any file that looks like text.
+        #[arg(long)]
+        ext: Option<String>,
+        /// Directory ingest: skip files larger than this many bytes.
+        #[arg(long = "max-bytes", default_value_t = 5_000_000)]
+        max_bytes: u64,
     },
     /// Print the top-k semantic matches as JSON.
     Search {
@@ -67,10 +77,21 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             path,
             chunk_words,
             overlap_words,
+            ext,
+            max_bytes,
         } => {
             let mut rag = open_rag(&cli.store)?;
-            let ids = rag.ingest_file(&path, chunk_words, overlap_words)?;
-            println!("stored {} chunks (count={})", ids.len(), rag.count());
+            if path.is_dir() {
+                let summary =
+                    ingest_dir(&mut rag, &path, chunk_words, overlap_words, ext, max_bytes)?;
+                println!(
+                    "ingested {} files ({} chunks), skipped {}",
+                    summary.files, summary.chunks, summary.skipped
+                );
+            } else {
+                let ids = rag.ingest_file(&path, chunk_words, overlap_words)?;
+                println!("stored {} chunks (count={})", ids.len(), rag.count());
+            }
         }
         Command::Search { query, k } => {
             let rag = open_rag(&cli.store)?;
@@ -99,6 +120,68 @@ fn open_rag(store: &Path) -> anyhow::Result<Rag> {
     Rag::open(store, Box::new(embedder)).context("opening store")
 }
 
+/// Tally of a directory ingestion run.
+struct IngestSummary {
+    files: usize,
+    chunks: usize,
+    skipped: usize,
+}
+
+/// Parse a comma-separated extension list into lowercased, dot-stripped entries.
+/// `None` (the flag omitted) means "no extension filter".
+fn parse_exts(ext: Option<String>) -> Option<Vec<String>> {
+    ext.map(|s| {
+        s.split(',')
+            .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+            .filter(|e| !e.is_empty())
+            .collect()
+    })
+}
+
+/// Walk `dir`, ingesting each text-like file with a progress bar. A file that
+/// fails to read/chunk/embed is logged and counted as skipped; the run
+/// continues (per-file resilience).
+fn ingest_dir(
+    rag: &mut Rag,
+    dir: &Path,
+    chunk_words: usize,
+    overlap_words: usize,
+    ext: Option<String>,
+    max_bytes: u64,
+) -> anyhow::Result<IngestSummary> {
+    let opts = ScanOpts {
+        exts: parse_exts(ext),
+        max_bytes,
+    };
+    let files = scan::collect_text_files(dir, &opts).context("scanning directory")?;
+    let bar = ProgressBar::new(files.len() as u64);
+    bar.set_style(
+        ProgressStyle::with_template("{bar:40} {pos}/{len} {msg}")
+            .expect("static progress template is valid"),
+    );
+    let mut summary = IngestSummary {
+        files: 0,
+        chunks: 0,
+        skipped: 0,
+    };
+    for path in &files {
+        bar.set_message(path.display().to_string());
+        match rag.ingest_file(path, chunk_words, overlap_words) {
+            Ok(ids) => {
+                summary.files += 1;
+                summary.chunks += ids.len();
+            }
+            Err(e) => {
+                warn!("skipping {}: {e}", path.display());
+                summary.skipped += 1;
+            }
+        }
+        bar.inc(1);
+    }
+    bar.finish_and_clear();
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +190,39 @@ mod tests {
 
     // The handlers above require the real model; here we test the same logic
     // path (add -> search -> list serialization) against a fake-backed Rag.
+
+    #[test]
+    fn parse_exts_normalizes() {
+        assert_eq!(
+            parse_exts(Some(".MD, txt ,".to_string())),
+            Some(vec!["md".to_string(), "txt".to_string()])
+        );
+        assert_eq!(parse_exts(None), None);
+    }
+
+    #[test]
+    fn ingest_dir_roundtrip_offline() {
+        let store_dir = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        std::fs::write(src.path().join("a.md"), "# Rust\nrust code is fast").unwrap();
+        std::fs::write(src.path().join("b.txt"), "the cat ate food").unwrap();
+        std::fs::write(src.path().join("img.bin"), [0u8, 1, 2]).unwrap(); // binary
+
+        let mut rag = Rag::open(store_dir.path(), Box::new(FakeEmbedder::new())).unwrap();
+        let summary = ingest_dir(&mut rag, src.path(), 180, 40, None, 1_000_000).unwrap();
+        assert_eq!(summary.files, 2); // a.md + b.txt; img.bin skipped as binary
+        assert!(summary.chunks >= 2);
+
+        // Content from an ingested file is searchable.
+        let hits = rag.search("rust", 4).unwrap();
+        assert!(hits.iter().any(|h| h.text.contains("rust code is fast")));
+
+        // Re-ingesting the same directory is idempotent (no new entries).
+        let before = rag.count();
+        ingest_dir(&mut rag, src.path(), 180, 40, None, 1_000_000).unwrap();
+        assert_eq!(rag.count(), before);
+    }
+
     #[test]
     fn add_search_list_roundtrip_offline() {
         let dir = tempdir().unwrap();
