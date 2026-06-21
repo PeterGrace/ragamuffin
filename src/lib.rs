@@ -8,4 +8,5 @@ pub mod embedder;
 pub mod error;
 pub mod mcp;
 pub mod rag;
+pub mod scan;
 pub mod store;

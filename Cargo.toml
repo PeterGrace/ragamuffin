@@ -17,6 +17,7 @@ anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 dotenv = "0.15"
 fastembed = "5"
+indicatif = "0.18"
 rayon = "1"
 rmcp = { version = "1", features = ["server", "macros", "transport-io"] }
 schemars = "1"
@@ -27,6 +28,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"
