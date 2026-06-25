@@ -121,6 +121,28 @@ fn is_heading(line: &str) -> bool {
     line.trim_start().starts_with('#')
 }
 
+/// Parse `text` into JSON records. Whole-file JSON is tried first: an array
+/// yields one record per element, any other value (object or scalar) yields a
+/// single record. If whole-file parsing fails, fall back to JSONL — each
+/// non-empty line parsed independently, keeping only the lines that parse.
+/// Returns an empty vec when nothing parses (empty or non-JSON input).
+///
+/// Currently used only by tests; Task 4 (`chunk_json`) will promote this to a
+/// production call site at which point the `#[cfg(test)]` gate should be removed.
+#[cfg(test)]
+fn parse_json_records(text: &str) -> Vec<Value> {
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
+        return match value {
+            Value::Array(items) => items,
+            other => vec![other],
+        };
+    }
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +203,39 @@ mod tests {
     #[test]
     fn chunk_markdown_empty_input_no_chunks() {
         assert!(chunk_markdown("   \n  ", 50, 10).is_empty());
+    }
+
+    #[test]
+    fn parse_json_records_array_yields_one_per_element() {
+        let records = parse_json_records(r#"[{"a":1},{"a":2},{"a":3}]"#);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], json!({"a": 1}));
+        assert_eq!(records[2], json!({"a": 3}));
+    }
+
+    #[test]
+    fn parse_json_records_single_object_is_one_record() {
+        let records = parse_json_records(r#"{"a":1,"b":2}"#);
+        assert_eq!(records, vec![json!({"a": 1, "b": 2})]);
+    }
+
+    #[test]
+    fn parse_json_records_scalar_is_one_record() {
+        assert_eq!(parse_json_records("42"), vec![json!(42)]);
+        assert_eq!(parse_json_records(r#""hello""#), vec![json!("hello")]);
+    }
+
+    #[test]
+    fn parse_json_records_jsonl_parses_each_line() {
+        let text = "{\"a\":1}\n\n{\"a\":2}\n";
+        let records = parse_json_records(text);
+        assert_eq!(records, vec![json!({"a": 1}), json!({"a": 2})]);
+    }
+
+    #[test]
+    fn parse_json_records_malformed_is_empty() {
+        assert!(parse_json_records("not json at all {").is_empty());
+        assert!(parse_json_records("").is_empty());
     }
 
     #[test]
