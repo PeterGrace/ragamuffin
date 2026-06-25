@@ -121,6 +121,94 @@ fn is_heading(line: &str) -> bool {
     line.trim_start().starts_with('#')
 }
 
+/// Maximum nesting depth before a subtree is collapsed to a compact JSON
+/// string. A safety rail against stack overflow on adversarial input — far
+/// beyond the depth of normal records, so it never triggers in practice.
+///
+/// Currently used only by tests; Task 4 (`chunk_json`) will promote these
+/// helpers to a production call site at which point the `#[cfg(test)]` gates
+/// should be removed.
+#[cfg(test)]
+const MAX_FLATTEN_DEPTH: usize = 64;
+
+/// Join a dotted key path: `""` + `k` -> `k`; `prefix` + `k` -> `prefix.k`.
+#[cfg(test)]
+fn join_key(prefix: &str, key: &str) -> String {
+    if prefix.is_empty() {
+        key.to_string()
+    } else {
+        format!("{prefix}.{key}")
+    }
+}
+
+/// Serialize `value` to a compact one-line JSON string. Serialization of an
+/// in-memory `Value` is infallible in practice; on the impossible error path we
+/// fall back to an empty string rather than panic.
+#[cfg(test)]
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Recursively flatten `value` under the dotted-key `prefix`. String leaves and
+/// all-string arrays become `key: value` text lines (pushed to `lines`); number,
+/// bool, and null leaves are inserted into `meta` under their dotted key. Nested
+/// objects and non-string arrays recurse (arrays with indexed keys). At
+/// [`MAX_FLATTEN_DEPTH`] the remaining subtree is emitted as one compact-JSON
+/// text line instead of recursing further.
+#[cfg(test)]
+fn flatten_value(
+    prefix: &str,
+    value: &Value,
+    depth: usize,
+    lines: &mut Vec<String>,
+    meta: &mut serde_json::Map<String, Value>,
+) {
+    if depth >= MAX_FLATTEN_DEPTH {
+        lines.push(format!("{prefix}: {}", compact_json(value)));
+        return;
+    }
+    match value {
+        Value::String(s) => {
+            if prefix.is_empty() {
+                lines.push(s.clone());
+            } else {
+                lines.push(format!("{prefix}: {s}"));
+            }
+        }
+        Value::Number(_) | Value::Bool(_) | Value::Null => {
+            // A bare top-level scalar has no key; it is preserved via `raw`.
+            if !prefix.is_empty() {
+                meta.insert(prefix.to_string(), value.clone());
+            }
+        }
+        Value::Array(items) => {
+            if !items.is_empty() && items.iter().all(Value::is_string) {
+                let joined = items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if prefix.is_empty() {
+                    lines.push(joined);
+                } else {
+                    lines.push(format!("{prefix}: {joined}"));
+                }
+            } else {
+                for (i, item) in items.iter().enumerate() {
+                    let key = join_key(prefix, &i.to_string());
+                    flatten_value(&key, item, depth + 1, lines, meta);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for (k, v) in map {
+                let key = join_key(prefix, k);
+                flatten_value(&key, v, depth + 1, lines, meta);
+            }
+        }
+    }
+}
+
 /// Parse `text` into JSON records. Whole-file JSON is tried first: an array
 /// yields one record per element, any other value (object or scalar) yields a
 /// single record. If whole-file parsing fails, fall back to JSONL — each
@@ -249,5 +337,63 @@ mod tests {
         assert_eq!(txt.len(), 1);
         assert_eq!(txt[0].text, "a b c");
         assert_eq!(txt[0].metadata, json!({ "chunk": 0 }));
+    }
+
+    #[test]
+    fn flatten_value_routes_strings_to_text_and_scalars_to_meta() {
+        let value = json!({
+            "title": "Quarterly Report",
+            "year": 2024,
+            "published": true,
+            "author": {"name": "Jane Doe", "team_size": 5},
+            "tags": ["finance", "q3"]
+        });
+        let mut lines = Vec::new();
+        let mut meta = serde_json::Map::new();
+        flatten_value("", &value, 0, &mut lines, &mut meta);
+
+        // String leaves and string arrays become text lines.
+        assert!(lines.contains(&"title: Quarterly Report".to_string()));
+        assert!(lines.contains(&"author.name: Jane Doe".to_string()));
+        assert!(lines.contains(&"tags: finance, q3".to_string()));
+        // Scalar leaves (including nested) go to metadata under dotted keys.
+        assert_eq!(meta.get("year"), Some(&json!(2024)));
+        assert_eq!(meta.get("published"), Some(&json!(true)));
+        assert_eq!(meta.get("author.team_size"), Some(&json!(5)));
+        // Strings are not duplicated into metadata.
+        assert!(meta.get("title").is_none());
+    }
+
+    #[test]
+    fn flatten_value_top_level_string_has_no_key_prefix() {
+        let mut lines = Vec::new();
+        let mut meta = serde_json::Map::new();
+        flatten_value("", &json!("hello world"), 0, &mut lines, &mut meta);
+        assert_eq!(lines, vec!["hello world".to_string()]);
+        assert!(meta.is_empty());
+    }
+
+    #[test]
+    fn flatten_value_array_of_objects_uses_indexed_keys() {
+        let value = json!({"items": [{"title": "A"}, {"title": "B"}]});
+        let mut lines = Vec::new();
+        let mut meta = serde_json::Map::new();
+        flatten_value("", &value, 0, &mut lines, &mut meta);
+        assert!(lines.contains(&"items.0.title: A".to_string()));
+        assert!(lines.contains(&"items.1.title: B".to_string()));
+    }
+
+    #[test]
+    fn flatten_value_caps_recursion_depth() {
+        // Build a structure deeper than the cap; it must not overflow the stack
+        // and the deepest content collapses into a single line.
+        let mut value = json!("leaf");
+        for _ in 0..100 {
+            value = json!({ "n": value });
+        }
+        let mut lines = Vec::new();
+        let mut meta = serde_json::Map::new();
+        flatten_value("", &value, 0, &mut lines, &mut meta);
+        assert!(!lines.is_empty());
     }
 }
