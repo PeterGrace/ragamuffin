@@ -9,6 +9,9 @@ pub enum EmbedError {
     /// The underlying embedding model returned an error.
     #[error("embedding model failed: {0}")]
     Model(String),
+    /// The on-disk model cache directory could not be resolved or created.
+    #[error("could not prepare model cache directory: {0}")]
+    Cache(String),
 }
 
 /// Failure in the on-disk vector store.
