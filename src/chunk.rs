@@ -74,6 +74,9 @@ pub fn chunk_for_path(
         Some("md") | Some("markdown") => {
             indexed_chunks(chunk_markdown(text, chunk_words, overlap_words))
         }
+        Some("json") | Some("jsonl") | Some("ndjson") => {
+            chunk_json(text, chunk_words, overlap_words)
+        }
         _ => indexed_chunks(chunk_text(text, chunk_words, overlap_words)),
     }
 }
@@ -124,15 +127,9 @@ fn is_heading(line: &str) -> bool {
 /// Maximum nesting depth before a subtree is collapsed to a compact JSON
 /// string. A safety rail against stack overflow on adversarial input — far
 /// beyond the depth of normal records, so it never triggers in practice.
-///
-/// Currently used only by tests; Task 4 (`chunk_json`) will promote these
-/// helpers to a production call site at which point the `#[cfg(test)]` gates
-/// should be removed.
-#[cfg(test)]
 const MAX_FLATTEN_DEPTH: usize = 64;
 
 /// Join a dotted key path: `""` + `k` -> `k`; `prefix` + `k` -> `prefix.k`.
-#[cfg(test)]
 fn join_key(prefix: &str, key: &str) -> String {
     if prefix.is_empty() {
         key.to_string()
@@ -144,7 +141,6 @@ fn join_key(prefix: &str, key: &str) -> String {
 /// Serialize `value` to a compact one-line JSON string. Serialization of an
 /// in-memory `Value` is infallible in practice; on the impossible error path we
 /// fall back to an empty string rather than panic.
-#[cfg(test)]
 fn compact_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
@@ -155,7 +151,6 @@ fn compact_json(value: &Value) -> String {
 /// objects and non-string arrays recurse (arrays with indexed keys). At
 /// [`MAX_FLATTEN_DEPTH`] the remaining subtree is emitted as one compact-JSON
 /// text line instead of recursing further.
-#[cfg(test)]
 fn flatten_value(
     prefix: &str,
     value: &Value,
@@ -164,7 +159,11 @@ fn flatten_value(
     meta: &mut serde_json::Map<String, Value>,
 ) {
     if depth >= MAX_FLATTEN_DEPTH {
-        lines.push(format!("{prefix}: {}", compact_json(value)));
+        if prefix.is_empty() {
+            lines.push(compact_json(value));
+        } else {
+            lines.push(format!("{prefix}: {}", compact_json(value)));
+        }
         return;
     }
     match value {
@@ -214,10 +213,6 @@ fn flatten_value(
 /// single record. If whole-file parsing fails, fall back to JSONL — each
 /// non-empty line parsed independently, keeping only the lines that parse.
 /// Returns an empty vec when nothing parses (empty or non-JSON input).
-///
-/// Currently used only by tests; Task 4 (`chunk_json`) will promote this to a
-/// production call site at which point the `#[cfg(test)]` gate should be removed.
-#[cfg(test)]
 fn parse_json_records(text: &str) -> Vec<Value> {
     if let Ok(value) = serde_json::from_str::<Value>(text) {
         return match value {
@@ -229,6 +224,64 @@ fn parse_json_records(text: &str) -> Vec<Value> {
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect()
+}
+
+/// Field-aware chunking for JSON / JSONL input. Each record (array element,
+/// single value, or JSONL line) becomes one chunk: string fields flatten into
+/// the embedded text, scalar fields into metadata, and the original record is
+/// kept verbatim under `raw`. A record whose text exceeds `chunk_words` is
+/// sub-split with [`chunk_text`], each part tagged `part`. Empty input yields no
+/// chunks; non-JSON input falls back to plain-text chunking (with a warning).
+pub fn chunk_json(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<Chunk> {
+    let records = parse_json_records(text);
+    if records.is_empty() {
+        // Whitespace-only or a valid-but-empty JSON array (e.g. `[]`) yields no
+        // chunks; anything else that produced no records is non-JSON and falls
+        // back to plain-text chunking.
+        if text.trim().is_empty() || serde_json::from_str::<Value>(text).is_ok() {
+            return Vec::new();
+        }
+        tracing::warn!("content did not parse as JSON or JSONL; ingesting as plain text");
+        return indexed_chunks(chunk_text(text, chunk_words, overlap_words));
+    }
+
+    let mut chunks = Vec::with_capacity(records.len());
+    for (record, value) in records.into_iter().enumerate() {
+        let mut lines = Vec::new();
+        let mut base = serde_json::Map::new();
+        flatten_value("", &value, 0, &mut lines, &mut base);
+
+        // A record with no string content still needs embeddable text.
+        let body = if lines.is_empty() {
+            compact_json(&value)
+        } else {
+            lines.join("\n")
+        };
+
+        base.insert("record".to_string(), json!(record));
+        base.insert("source_kind".to_string(), json!("json"));
+        base.insert("raw".to_string(), value);
+
+        if body.split_whitespace().count() > chunk_words {
+            for (part, sub) in chunk_text(&body, chunk_words, overlap_words)
+                .into_iter()
+                .enumerate()
+            {
+                let mut metadata = base.clone();
+                metadata.insert("part".to_string(), json!(part));
+                chunks.push(Chunk {
+                    text: sub,
+                    metadata: Value::Object(metadata),
+                });
+            }
+        } else {
+            chunks.push(Chunk {
+                text: body,
+                metadata: Value::Object(base),
+            });
+        }
+    }
+    chunks
 }
 
 #[cfg(test)]
@@ -395,5 +448,100 @@ mod tests {
         let mut meta = serde_json::Map::new();
         flatten_value("", &value, 0, &mut lines, &mut meta);
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn chunk_json_array_yields_one_chunk_per_record() {
+        let text = r#"[{"title":"Alpha"},{"title":"Beta"}]"#;
+        let chunks = chunk_json(text, 180, 40);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "title: Alpha");
+        assert_eq!(chunks[0].metadata["record"], json!(0));
+        assert_eq!(chunks[1].metadata["record"], json!(1));
+        assert_eq!(chunks[0].metadata["source_kind"], json!("json"));
+    }
+
+    #[test]
+    fn chunk_json_single_object_is_one_record_with_raw_and_scalars() {
+        let text = r#"{"title":"Quarterly Report","year":2024,
+            "author":{"name":"Jane Doe","team_size":5},"tags":["finance","q3"]}"#;
+        let chunks = chunk_json(text, 180, 40);
+        assert_eq!(chunks.len(), 1);
+        let c = &chunks[0];
+        assert!(c.text.contains("title: Quarterly Report"));
+        assert!(c.text.contains("author.name: Jane Doe"));
+        assert!(c.text.contains("tags: finance, q3"));
+        assert_eq!(c.metadata["record"], json!(0));
+        assert_eq!(c.metadata["year"], json!(2024));
+        assert_eq!(c.metadata["author.team_size"], json!(5));
+        // The original record is preserved verbatim under `raw`.
+        assert_eq!(c.metadata["raw"]["author"]["name"], json!("Jane Doe"));
+    }
+
+    #[test]
+    fn chunk_json_record_without_strings_embeds_compact_json() {
+        let chunks = chunk_json(r#"[{"count":7}]"#, 180, 40);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, r#"{"count":7}"#);
+        assert_eq!(chunks[0].metadata["count"], json!(7));
+    }
+
+    #[test]
+    fn chunk_json_oversize_record_subsplits_with_part() {
+        // A single record whose text exceeds chunk_words must sub-split.
+        let body = (0..50).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+        let text = format!(r#"[{{"note":"{body}"}}]"#);
+        let chunks = chunk_json(&text, 20, 5);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks[0].metadata["part"], json!(0));
+        assert_eq!(chunks[1].metadata["part"], json!(1));
+        // `raw` is repeated on every part so each chunk is self-contained.
+        assert!(chunks[0].metadata["raw"]["note"].is_string());
+        assert!(chunks[1].metadata["raw"]["note"].is_string());
+    }
+
+    #[test]
+    fn chunk_json_empty_array_yields_no_chunks() {
+        assert!(chunk_json("[]", 180, 40).is_empty());
+        assert!(chunk_json("   ", 180, 40).is_empty());
+    }
+
+    #[test]
+    fn chunk_json_malformed_falls_back_to_text() {
+        let chunks = chunk_json("this is not json", 180, 40);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "this is not json");
+        assert_eq!(chunks[0].metadata, json!({ "chunk": 0 }));
+    }
+
+    #[test]
+    fn chunk_json_jsonl_parses_each_line() {
+        let text = "{\"title\":\"A\"}\n{\"title\":\"B\"}";
+        let chunks = chunk_json(text, 180, 40);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "title: A");
+        assert_eq!(chunks[1].text, "title: B");
+    }
+
+    #[test]
+    fn chunk_for_path_routes_json_extensions() {
+        for name in ["data.json", "data.jsonl", "data.ndjson"] {
+            let chunks = chunk_for_path(Path::new(name), r#"{"title":"X"}"#, 180, 40);
+            assert_eq!(chunks.len(), 1, "routing failed for {name}");
+            assert_eq!(chunks[0].metadata["source_kind"], json!("json"));
+        }
+    }
+
+    #[test]
+    fn parse_json_records_array_asserts_all_elements() {
+        let records = parse_json_records(r#"[{"a":1},{"a":2},{"a":3}]"#);
+        assert_eq!(records[1], json!({"a": 2}));
+    }
+
+    #[test]
+    fn parse_json_records_jsonl_skips_malformed_lines() {
+        let text = "{\"a\":1}\nnot json {\n{\"a\":2}\n";
+        let records = parse_json_records(text);
+        assert_eq!(records, vec![json!({"a": 1}), json!({"a": 2})]);
     }
 }
