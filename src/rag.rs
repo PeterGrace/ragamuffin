@@ -104,4 +104,33 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "rust code is fast"); // shares "rust"
     }
+
+    #[test]
+    fn ingest_json_file_stores_per_record_metadata() {
+        let dir = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        let json_path = src.path().join("records.json");
+        std::fs::write(
+            &json_path,
+            r#"[{"title":"rust memory notes","year":2024},
+                {"title":"the cat ate food","year":2023}]"#,
+        )
+        .unwrap();
+
+        let mut rag = Rag::open(dir.path(), Box::new(FakeEmbedder::new())).unwrap();
+        let ids = rag.ingest_file(&json_path, 180, 40).unwrap();
+        assert_eq!(ids.len(), 2); // one chunk per record
+
+        // Per-record metadata is stored: source_kind, record index, scalar year.
+        let records = rag.all();
+        assert!(records
+            .iter()
+            .any(|m| m.metadata["source_kind"] == serde_json::json!("json")
+                && m.metadata["year"] == serde_json::json!(2024)));
+
+        // A flattened string field is retrievable by semantic search.
+        let hits = rag.search("rust", 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].text.contains("rust memory notes"));
+    }
 }
