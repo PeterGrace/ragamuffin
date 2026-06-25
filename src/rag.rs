@@ -37,7 +37,8 @@ impl Rag {
     }
 
     /// Read, chunk, embed the batch, and store each chunk (§4.3). The source is
-    /// the file path; each chunk records its index in metadata.
+    /// the file path; each chunk carries its own metadata (positional
+    /// `{"chunk": i}` for text/markdown, field-aware for JSON).
     pub fn ingest_file(
         &mut self,
         path: &Path,

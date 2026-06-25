@@ -351,6 +351,7 @@ mod tests {
         let records = parse_json_records(r#"[{"a":1},{"a":2},{"a":3}]"#);
         assert_eq!(records.len(), 3);
         assert_eq!(records[0], json!({"a": 1}));
+        assert_eq!(records[1], json!({"a": 2}));
         assert_eq!(records[2], json!({"a": 3}));
     }
 
@@ -530,12 +531,6 @@ mod tests {
             assert_eq!(chunks.len(), 1, "routing failed for {name}");
             assert_eq!(chunks[0].metadata["source_kind"], json!("json"));
         }
-    }
-
-    #[test]
-    fn parse_json_records_array_asserts_all_elements() {
-        let records = parse_json_records(r#"[{"a":1},{"a":2},{"a":3}]"#);
-        assert_eq!(records[1], json!({"a": 2}));
     }
 
     #[test]
