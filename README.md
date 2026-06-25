@@ -23,7 +23,10 @@ on first use into `.fastembed_cache/`). `list` is fully offline.
 hidden entries and anything that does not look like UTF-8 text (binaries are
 detected by content, not just extension). Use `--ext` to narrow by extension and
 `--max-bytes` to cap file size. Markdown files are chunked on headings so each
-chunk stays self-contained; other files use fixed-width word windows. Re-running
+chunk stays self-contained; JSON files (`.json`, `.jsonl`, `.ndjson`) are
+ingested field-aware — one entry per record, with string fields flattened into
+the embedded text, scalar fields stored as filterable metadata, and the original
+record preserved under `raw`; other files use fixed-width word windows. Re-running
 `ingest` is idempotent.
 
 ## MCP server
