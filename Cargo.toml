@@ -39,12 +39,15 @@ walkdir = "2"
 tempfile = "3"
 
 # `ort-sys`'s build script downloads the ONNX Runtime binary using `ureq` with
-# `native-tls`, which links `openssl-sys`. The default `cross` images ship an
-# OpenSSL too old for modern `openssl-sys`. Declaring `openssl-sys` here with
-# the `vendored` feature forces it to compile OpenSSL from source for the build
-# host, so no system OpenSSL is required. `openssl-sys` lives in the build
-# dependency graph (it is only reached through `ort-sys`'s build script), so the
-# feature must be enabled from *our* build dependencies to unify across that
-# graph; the no-op `build.rs` ensures this build dependency is active.
-[build-dependencies]
+# `native-tls`. On Linux `native-tls` links `openssl-sys`; on Windows it uses
+# SChannel and on macOS it uses Security.framework, so OpenSSL is only ever
+# pulled in on Linux. Declaring `openssl-sys` here with the `vendored` feature
+# forces it to compile OpenSSL from source for the build host, so no system
+# OpenSSL is required. `openssl-sys` lives in the build dependency graph (it is
+# only reached through `ort-sys`'s build script), so the feature must be enabled
+# from *our* build dependencies to unify across that graph; the no-op `build.rs`
+# ensures this build dependency is active. Scope it to Linux so Windows and
+# macOS builds do not try to compile OpenSSL (which they neither need nor have
+# the Perl/NASM toolchain for).
+[target.'cfg(target_os = "linux")'.build-dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }

@@ -36,6 +36,12 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             asset_name: ragamuffin-aarch64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset_name: ragamuffin-x86_64-pc-windows-msvc
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            asset_name: ragamuffin-aarch64-pc-windows-msvc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +58,15 @@ jobs:
 
       - name: Rename binary
         shell: bash
-        run: cp target/${{ matrix.target }}/release/ragamuffin ${{ matrix.asset_name }}
+        # Windows binaries carry a `.exe` suffix; copy with it when present so
+        # the released asset keeps a runnable extension.
+        run: |
+          bin="target/${{ matrix.target }}/release/ragamuffin"
+          if [ -f "${bin}.exe" ]; then
+            cp "${bin}.exe" "${{ matrix.asset_name }}.exe"
+          else
+            cp "${bin}" "${{ matrix.asset_name }}"
+          fi
 
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
