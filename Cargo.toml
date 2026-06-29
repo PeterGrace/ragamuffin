@@ -37,3 +37,14 @@ walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# `ort-sys`'s build script downloads the ONNX Runtime binary using `ureq` with
+# `native-tls`, which links `openssl-sys`. The default `cross` images ship an
+# OpenSSL too old for modern `openssl-sys`. Declaring `openssl-sys` here with
+# the `vendored` feature forces it to compile OpenSSL from source for the build
+# host, so no system OpenSSL is required. `openssl-sys` lives in the build
+# dependency graph (it is only reached through `ort-sys`'s build script), so the
+# feature must be enabled from *our* build dependencies to unify across that
+# graph; the no-op `build.rs` ensures this build dependency is active.
+[build-dependencies]
+openssl-sys = { version = "0.9", features = ["vendored"] }

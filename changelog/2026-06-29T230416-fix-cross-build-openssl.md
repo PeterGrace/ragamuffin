@@ -43,11 +43,22 @@ OpenSSL directly; it was only there as a TLS backend for downloading artifacts.
 
   rustls is pure Rust, so the released binary links no system OpenSSL.
 
-- **`Cross.toml`** (new) — `ort-sys`'s build script still needs host-side
-  OpenSSL headers (its `ureq` dependency hardcodes `native-tls` upstream with no
-  rustls option). A `pre-build` step installs `libssl-dev` and `pkg-config` into
-  the cross container for both Linux targets. Because the build script runs on
-  the host, host (amd64) OpenSSL suffices for both target architectures.
+- **`Cargo.toml` + `build.rs`** (new) — `ort-sys`'s build script still links
+  `openssl-sys` for the build host (its `ureq` dependency hardcodes `native-tls`
+  upstream with no rustls option). The default `cross` images are based on
+  Ubuntu Xenial, which only ships OpenSSL 1.0.2 — too old for modern
+  `openssl-sys` (`This crate is only compatible with OpenSSL 1.1.0, 1.1.1, 3.x,
+  or 4.x`). Rather than depend on the image's system OpenSSL, we vendor it:
+  declare `openssl-sys` with the `vendored` feature as a build dependency, which
+  pulls in `openssl-src` and compiles OpenSSL 3.x from source for the build
+  host. Because `openssl-sys` is only reached through `ort-sys`'s build script
+  (the build dependency graph), the feature is enabled from *our* build
+  dependencies so it unifies across that graph; the no-op `build.rs` makes the
+  build dependency active.
+
+- **`Cross.toml`** (new) — vendored OpenSSL compiles from source, which needs
+  `perl` and `make`; a `pre-build` step installs them into the cross container
+  for both Linux targets. No system OpenSSL (`libssl-dev`) is required.
 
 ## Verification
 

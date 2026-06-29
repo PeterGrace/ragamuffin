@@ -1,13 +1,15 @@
 # `cross` configuration.
 #
 # `ort-sys` downloads the ONNX Runtime binary in its build script using `ureq`
-# with the `native-tls` feature hardcoded (no rustls option upstream). That
-# build script runs on the *host* inside the cross container, so the host needs
-# OpenSSL headers available at build time. The runtime binary itself links
-# rustls (see `fastembed`'s `hf-hub-rustls-tls` feature in Cargo.toml), so no
-# OpenSSL is needed for the target.
+# with the `native-tls` feature hardcoded (no rustls option upstream), which
+# links `openssl-sys`. The default `cross` images ship an OpenSSL too old for
+# modern `openssl-sys`, so we vendor OpenSSL instead (see the `openssl-sys`
+# build dependency in Cargo.toml). Vendored OpenSSL is compiled from source for
+# the build host, which requires `perl` and `make`. The runtime binary itself
+# links rustls (see `fastembed`'s `hf-hub-rustls-tls` feature), so no OpenSSL is
+# needed for the target.
 [target.x86_64-unknown-linux-gnu]
-pre-build = ["apt-get update && apt-get install --assume-yes libssl-dev pkg-config"]
+pre-build = ["apt-get update && apt-get install --assume-yes perl make"]
 
 [target.aarch64-unknown-linux-gnu]
-pre-build = ["apt-get update && apt-get install --assume-yes libssl-dev pkg-config"]
+pre-build = ["apt-get update && apt-get install --assume-yes perl make"]
