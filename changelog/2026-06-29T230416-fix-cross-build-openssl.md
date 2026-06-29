@@ -69,3 +69,24 @@ OpenSSL directly; it was only there as a TLS backend for downloading artifacts.
 
 Functionality is unchanged: rustls vs native-tls only swaps the TLS
 implementation used to fetch models and the ONNX Runtime binary.
+
+## Follow-up: drop `cross` entirely in favour of native runners
+
+After OpenSSL was resolved, the `cross`-built Linux jobs hit a final linker
+error: `ort` statically links `libonnxruntime.a`, but inside the `cross`
+container the linker could not resolve `-lonnxruntime` (mangled search path /
+link mode). The same `cargo build --release` links the static ONNX Runtime
+cleanly on a native host.
+
+`cross` was never actually required here:
+
+- `x86_64-unknown-linux-gnu` runs on an already-x86_64 `ubuntu-latest` runner.
+- `aarch64-unknown-linux-gnu` can build natively on GitHub's free arm64 Linux
+  runner, `ubuntu-24.04-arm` (available for public repositories).
+
+`.github/workflows/release.yaml` was simplified to build every target natively
+(removing the `use_cross` matrix flag, the `Install cross` step, and the split
+native/cross build steps). `Cross.toml` was deleted as dead configuration. The
+vendored-OpenSSL build dependency is retained: it is target-agnostic, keeps the
+build hermetic regardless of runner image, and removes any dependence on the
+runner's system OpenSSL.

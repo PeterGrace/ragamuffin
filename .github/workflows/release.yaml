@@ -21,21 +21,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Every target builds natively on a matching-architecture runner, so
+          # no cross-compilation is needed. GitHub provides free arm64 Linux
+          # runners (`ubuntu-24.04-arm`) for public repositories.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            use_cross: true
             asset_name: ragamuffin-x86_64-unknown-linux-gnu
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
+            os: ubuntu-24.04-arm
             asset_name: ragamuffin-aarch64-unknown-linux-gnu
           - target: x86_64-apple-darwin
             os: macos-latest
-            use_cross: false
             asset_name: ragamuffin-x86_64-apple-darwin
           - target: aarch64-apple-darwin
             os: macos-latest
-            use_cross: false
             asset_name: ragamuffin-aarch64-apple-darwin
     steps:
       - name: Checkout
@@ -48,17 +47,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross == true
-        run: cargo install cross
-
-      - name: Build (native)
-        if: matrix.use_cross == false
+      - name: Build
         run: cargo build --release --target=${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.use_cross == true
-        run: cross build --release --target=${{ matrix.target }}
 
       - name: Rename binary
         shell: bash
